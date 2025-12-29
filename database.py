@@ -41,15 +41,27 @@ class HabitDatabase:
             )
         """)
         
-        # Habit logs table
+        # Habit logs table (with skip_reason for missed days)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS habit_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 habit_id INTEGER NOT NULL,
                 log_date DATE NOT NULL,
                 completed BOOLEAN DEFAULT 0,
+                skip_reason TEXT,
                 FOREIGN KEY (habit_id) REFERENCES habits(id) ON DELETE CASCADE,
                 UNIQUE(habit_id, log_date)
+            )
+        """)
+        
+        # Daily notes table for overall day notes
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS daily_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                note_date DATE NOT NULL,
+                reason TEXT,
+                UNIQUE(user_id, note_date)
             )
         """)
         
@@ -57,18 +69,25 @@ class HabitDatabase:
         conn.close()
     
     def _migrate_tables(self):
-        """Migrate existing tables to add user_id column if needed"""
+        """Migrate existing tables to add new columns if needed"""
         conn = self._get_connection()
         cursor = conn.cursor()
         
-        # Check if user_id column exists
+        # Check if user_id column exists in habits
         cursor.execute("PRAGMA table_info(habits)")
         columns = [col[1] for col in cursor.fetchall()]
         
         if 'user_id' not in columns:
             cursor.execute("ALTER TABLE habits ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'")
-            conn.commit()
         
+        # Check if skip_reason column exists in habit_logs
+        cursor.execute("PRAGMA table_info(habit_logs)")
+        log_columns = [col[1] for col in cursor.fetchall()]
+        
+        if 'skip_reason' not in log_columns:
+            cursor.execute("ALTER TABLE habit_logs ADD COLUMN skip_reason TEXT")
+        
+        conn.commit()
         conn.close()
     
     # ===== HABIT OPERATIONS =====
@@ -336,3 +355,65 @@ class HabitDatabase:
         
         conn.close()
         return users
+    
+    # ===== DAILY NOTES / SKIP REASONS =====
+    
+    def save_daily_note(self, user_id: str, note_date: date, reason: str):
+        """Save a note/reason for a day when habits weren't completed"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO daily_notes (user_id, note_date, reason)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, note_date) 
+            DO UPDATE SET reason = ?
+        """, (user_id, note_date, reason, reason))
+        
+        conn.commit()
+        conn.close()
+    
+    def get_daily_note(self, user_id: str, note_date: date) -> Optional[str]:
+        """Get the note/reason for a specific day"""
+        conn = self._get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT reason FROM daily_notes 
+            WHERE user_id = ? AND note_date = ?
+        """, (user_id, note_date))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        return row['reason'] if row else None
+    
+    def get_friend_activity(self, user_id: str, activity_date: date) -> Dict:
+        """Get a friend's activity for a specific date"""
+        habits = self.get_all_habits(user_id=user_id)
+        logs = self.get_logs_for_date(activity_date, user_id=user_id)
+        daily_note = self.get_daily_note(user_id, activity_date)
+        
+        completed_count = sum(1 for log in logs if log['completed'])
+        total_count = len(logs)
+        
+        return {
+            "habits": logs,
+            "completed_count": completed_count,
+            "total_count": total_count,
+            "completion_rate": (completed_count / total_count * 100) if total_count > 0 else 0,
+            "daily_note": daily_note
+        }
+    
+    def get_friend_week_activity(self, user_id: str, week_start: date) -> List[Dict]:
+        """Get a friend's activity for an entire week"""
+        week_data = []
+        
+        for i in range(7):
+            day = week_start + timedelta(days=i)
+            activity = self.get_friend_activity(user_id, day)
+            activity['date'] = day
+            week_data.append(activity)
+        
+        return week_data

@@ -194,14 +194,14 @@ st.sidebar.divider()
 st.sidebar.title("📋 Navigation")
 page = st.sidebar.radio(
     "Go to",
-    ["📅 Weekly View", "📊 Dashboard", "✅ Quick Check", "🎯 Manage Habits", "📈 Analytics"]
+    ["✅ Quick Check", "📅 Weekly View", "📊 Dashboard", "🎯 Manage Habits", "📈 Analytics", "👥 Friend Activity"]
 )
 
 st.sidebar.divider()
 
 # ===== FRIENDS LEADERBOARD =====
 st.sidebar.markdown("### 🏆 Friends Leaderboard")
-st.sidebar.caption("Today's Status")
+st.sidebar.caption("Today's Status • Click to view activity")
 
 # Get all users and their stats
 all_usernames = get_all_usernames()
@@ -222,7 +222,7 @@ for username in all_usernames:
 # Sort by streak (descending), then by completion rate
 leaderboard_data.sort(key=lambda x: (x["streak"], x["completion_rate"]), reverse=True)
 
-# Display leaderboard
+# Display leaderboard with clickable buttons
 for idx, user_data in enumerate(leaderboard_data):
     is_current = user_data["username"] == user_id
     is_done = user_data["completed_today"]
@@ -242,22 +242,14 @@ for idx, user_data in enumerate(leaderboard_data):
     elif idx == 2 and user_data["streak"] > 0:
         rank_emoji = "🥉 "
     
-    # Style based on status
-    if is_current:
-        style = "background: linear-gradient(135deg, #cce5ff 0%, #b8daff 100%); border-left: 4px solid #007bff;"
-    elif is_done:
-        style = "background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); border-left: 4px solid #28a745;"
-    else:
-        style = "background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border-left: 4px solid #dee2e6;"
+    # Create clickable button for each friend
+    button_label = f"{rank_emoji}{status} {user_data['display_name']} {streak_text}"
     
-    st.sidebar.markdown(f"""
-        <div style="padding: 8px 12px; margin: 4px 0; border-radius: 8px; {style}">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-weight: 600; font-size: 0.9rem;">{rank_emoji}{status} {user_data['display_name']}</span>
-                <span style="font-size: 0.8rem; color: #e65100;">{streak_text}</span>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
+    if st.sidebar.button(button_label, key=f"friend_{user_data['username']}", use_container_width=True):
+        st.session_state.selected_friend = user_data['username']
+        st.session_state.selected_friend_name = user_data['display_name']
+        # Navigate to friend activity page
+        st.rerun()
 
 if not leaderboard_data:
     st.sidebar.info("No friends yet! Ask them to sign up.")
@@ -266,8 +258,91 @@ st.sidebar.divider()
 st.sidebar.caption("💡 Daily Habit Tracker")
 st.sidebar.caption("Track together, grow together!")
 
+# ===== QUICK CHECK PAGE (DEFAULT/FIRST PAGE) =====
+if page == "✅ Quick Check":
+    st.markdown('<p class="main-header">✅ Today\'s Check-In</p>', unsafe_allow_html=True)
+    
+    today = date.today()
+    st.markdown(f"### 📅 {today.strftime('%A, %B %d, %Y')}")
+    
+    today_logs = db.get_logs_for_date(today, user_id=user_id)
+    
+    if not today_logs:
+        st.info("📝 No habits created yet. Go to '🎯 Manage Habits' to add your first habit!")
+    else:
+        # Show completion progress at top
+        completed = sum(1 for log in today_logs if log['completed'])
+        total = len(today_logs)
+        completion_pct = (completed / total * 100) if total > 0 else 0
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Completed", f"{completed}/{total}")
+        with col2:
+            st.metric("Progress", f"{completion_pct:.0f}%")
+        with col3:
+            user_stats = db.get_user_stats(user_id)
+            st.metric("🔥 Streak", f"{user_stats['current_streak']} days")
+        
+        st.progress(completion_pct / 100)
+        
+        st.divider()
+        st.markdown("### ✨ Check off your habits:")
+        
+        # Habit checklist
+        for log in today_logs:
+            col1, col2 = st.columns([5, 1])
+            
+            with col1:
+                if log['completed']:
+                    st.markdown(f"~~**{log['name']}**~~ ✅")
+                else:
+                    st.markdown(f"**{log['name']}**")
+                if log['description']:
+                    st.caption(log['description'])
+            
+            with col2:
+                checked = st.checkbox(
+                    "Done",
+                    value=bool(log['completed']),
+                    key=f"quick_habit_{log['habit_id']}",
+                    label_visibility="collapsed"
+                )
+                
+                # Update database
+                if checked != bool(log['completed']):
+                    db.log_habit(log['habit_id'], today, checked)
+                    st.rerun()
+        
+        # Daily note section if not all completed
+        if completed < total:
+            st.divider()
+            st.markdown("### 📝 Add a note (optional)")
+            st.caption("Explain why you couldn't complete all habits today")
+            
+            existing_note = db.get_daily_note(user_id, today)
+            
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                note_text = st.text_input(
+                    "Note",
+                    value=existing_note or "",
+                    placeholder="e.g., Sick day, traveling, emergency...",
+                    label_visibility="collapsed"
+                )
+            with col2:
+                if st.button("💾 Save", use_container_width=True):
+                    if note_text.strip():
+                        db.save_daily_note(user_id, today, note_text.strip())
+                        st.success("Saved!")
+                        st.rerun()
+        else:
+            st.divider()
+            st.success("🎉 Amazing! You've completed all your habits for today!")
+            st.balloons()
+
 # ===== WEEKLY VIEW PAGE (GRID STYLE) =====
-if page == "📅 Weekly View":
+elif page == "📅 Weekly View":
     st.markdown('<p class="main-header">📅 My Habits</p>', unsafe_allow_html=True)
     
     # Get current week
@@ -369,18 +444,30 @@ if page == "📅 Weekly View":
                     # Create unique key for checkbox
                     checkbox_key = f"habit_{habit['id']}_day_{day.strftime('%Y%m%d')}"
                     
-                    # Checkbox with proper label
-                    new_value = st.checkbox(
-                        f"Mark {habit['name']} for {day.strftime('%b %d')}",
-                        value=bool(is_checked),
-                        key=checkbox_key,
-                        label_visibility="collapsed"
-                    )
+                    # Only allow editing today's habits (past days are read-only)
+                    is_editable = (day == today)
+                    is_future = (day > today)
                     
-                    # Update database if value changed
-                    if new_value != is_checked:
-                        db.log_habit(habit['id'], day, new_value)
-                        st.rerun()
+                    if is_future:
+                        # Future days - show empty/disabled
+                        st.markdown("<div style='text-align:center; color:#ccc;'>—</div>", unsafe_allow_html=True)
+                    elif is_editable:
+                        # Today - editable checkbox
+                        new_value = st.checkbox(
+                            f"Mark {habit['name']} for {day.strftime('%b %d')}",
+                            value=bool(is_checked),
+                            key=checkbox_key,
+                            label_visibility="collapsed"
+                        )
+                        
+                        # Update database if value changed
+                        if new_value != is_checked:
+                            db.log_habit(habit['id'], day, new_value)
+                            st.rerun()
+                    else:
+                        # Past days - show status icon (read-only)
+                        status_icon = "✅" if is_checked else "⬜"
+                        st.markdown(f"<div style='text-align:center; font-size:1.2rem;'>{status_icon}</div>", unsafe_allow_html=True)
             
             # Week completion count
             with habit_cols[9]:
@@ -432,6 +519,47 @@ if page == "📅 Weekly View":
                 best_habit = max(habit_consistency, key=habit_consistency.get)
                 best_count = habit_consistency[best_habit]
                 st.metric("Most Consistent", best_habit, f"{best_count}/7 days")
+        
+        # ===== DAILY NOTE SECTION =====
+        st.divider()
+        st.subheader("📝 Daily Notes")
+        st.caption("Add a note if you couldn't complete your habits today")
+        
+        # Check today's completion
+        today_logs = db.get_logs_for_date(today, user_id=user_id)
+        today_completed = sum(1 for log in today_logs if log['completed'])
+        today_total = len(today_logs)
+        
+        # Show note option if not all habits completed today
+        if today_completed < today_total:
+            existing_note = db.get_daily_note(user_id, today)
+            
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                note_text = st.text_area(
+                    f"Why couldn't you complete all habits today? ({today_completed}/{today_total} done)",
+                    value=existing_note or "",
+                    placeholder="e.g., Was sick, Traveling, Emergency at work...",
+                    key="daily_note_input"
+                )
+            with col2:
+                st.markdown("")
+                st.markdown("")
+                if st.button("💾 Save Note", use_container_width=True):
+                    if note_text.strip():
+                        db.save_daily_note(user_id, today, note_text.strip())
+                        st.success("Note saved!")
+                        st.rerun()
+                    else:
+                        st.warning("Please enter a note")
+            
+            if existing_note:
+                st.info(f"📝 Current note: {existing_note}")
+        else:
+            st.success("🎉 Great job! You've completed all habits today!")
+            existing_note = db.get_daily_note(user_id, today)
+            if existing_note:
+                st.info(f"📝 Note for today: {existing_note}")
 
 # ===== DASHBOARD PAGE =====
 elif page == "📊 Dashboard":
@@ -526,53 +654,6 @@ elif page == "📊 Dashboard":
             df_heatmap = pd.DataFrame(heatmap_data)
             pivot_table = df_heatmap.pivot(index="Habit", columns="Date", values="Status")
             st.dataframe(pivot_table, width='stretch')
-
-# ===== QUICK CHECK PAGE =====
-elif page == "✅ Quick Check":
-    st.markdown('<p class="main-header">✅ Quick Check</p>', unsafe_allow_html=True)
-    
-    today = date.today()
-    st.write(f"**Date:** {today.strftime('%A, %B %d, %Y')}")
-    
-    today_logs = db.get_logs_for_date(today, user_id=user_id)
-    
-    if not today_logs:
-        st.info("📝 No habits created yet. Go to 'Manage Habits' to add your first habit!")
-    else:
-        st.write("✨ Quick check-in for today:")
-        st.divider()
-        
-        # Create a more compact grid layout
-        for log in today_logs:
-            col1, col2 = st.columns([4, 1])
-            
-            with col1:
-                st.markdown(f"**{log['name']}**")
-                if log['description']:
-                    st.caption(log['description'])
-            
-            with col2:
-                checked = st.checkbox(
-                    "✓",
-                    value=bool(log['completed']),
-                    key=f"quick_habit_{log['habit_id']}",
-                    label_visibility="visible"
-                )
-                
-                # Update database
-                if checked != bool(log['completed']):
-                    db.log_habit(log['habit_id'], today, checked)
-                    st.rerun()
-        
-        st.divider()
-        
-        # Show completion summary
-        completed = sum(1 for log in today_logs if log['completed'])
-        total = len(today_logs)
-        completion_pct = (completed / total * 100) if total > 0 else 0
-        
-        st.progress(completion_pct / 100)
-        st.write(f"**Progress:** {completed}/{total} habits completed ({completion_pct:.0f}%)")
 
 # ===== MANAGE HABITS PAGE =====
 elif page == "🎯 Manage Habits":
@@ -755,3 +836,114 @@ elif page == "📈 Analytics":
             
             df_calendar = pd.DataFrame(calendar_data)
             st.dataframe(df_calendar, width='stretch', hide_index=True)
+
+# ===== FRIEND ACTIVITY PAGE =====
+elif page == "👥 Friend Activity":
+    st.markdown('<p class="main-header">👥 Friend Activity</p>', unsafe_allow_html=True)
+    
+    # Get selected friend or show selection
+    selected_friend = st.session_state.get('selected_friend', None)
+    selected_friend_name = st.session_state.get('selected_friend_name', None)
+    
+    # Friend selector dropdown
+    friend_options = {get_user_display_name(u): u for u in all_usernames}
+    
+    if friend_options:
+        selected_display = st.selectbox(
+            "Select a friend to view their activity:",
+            options=list(friend_options.keys()),
+            index=list(friend_options.values()).index(selected_friend) if selected_friend in friend_options.values() else 0
+        )
+        selected_friend = friend_options[selected_display]
+        selected_friend_name = selected_display
+        
+        st.divider()
+        
+        # Date selector
+        today = date.today()
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            view_date = st.date_input("View date:", value=today, max_value=today)
+        
+        # Get friend's activity for the selected date
+        activity = db.get_friend_activity(selected_friend, view_date)
+        
+        st.markdown(f"### {selected_friend_name}'s Activity on {view_date.strftime('%A, %B %d')}")
+        
+        # Summary metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Completed", f"{activity['completed_count']}/{activity['total_count']}")
+        with col2:
+            st.metric("Completion Rate", f"{activity['completion_rate']:.0f}%")
+        with col3:
+            friend_stats = db.get_user_stats(selected_friend)
+            st.metric("Current Streak", f"{friend_stats['current_streak']} days")
+        
+        st.divider()
+        
+        # Show habits list
+        if activity['habits']:
+            st.markdown("#### Habits:")
+            for habit in activity['habits']:
+                status_icon = "✅" if habit['completed'] else "⬜"
+                st.markdown(f"**{status_icon} {habit['name']}**")
+                if habit['description']:
+                    st.caption(f"   {habit['description']}")
+        else:
+            st.info(f"{selected_friend_name} hasn't created any habits yet.")
+        
+        # Show daily note if any
+        if activity['daily_note']:
+            st.divider()
+            st.markdown("#### 📝 Note for this day:")
+            st.info(activity['daily_note'])
+        
+        st.divider()
+        
+        # Show weekly overview
+        st.markdown(f"### 📅 {selected_friend_name}'s Week Overview")
+        
+        # Week start (Monday)
+        week_start = view_date - timedelta(days=view_date.weekday())
+        week_activity = db.get_friend_week_activity(selected_friend, week_start)
+        
+        # Create weekly grid
+        week_cols = st.columns(7)
+        for idx, day_data in enumerate(week_activity):
+            with week_cols[idx]:
+                day_name = day_data['date'].strftime("%a")
+                day_num = day_data['date'].day
+                is_today = day_data['date'] == today
+                
+                # Calculate completion percentage for color
+                rate = day_data['completion_rate']
+                if rate == 100:
+                    bg_color = "#d4edda"  # Green
+                    border_color = "#28a745"
+                elif rate > 0:
+                    bg_color = "#fff3cd"  # Yellow
+                    border_color = "#ffc107"
+                else:
+                    bg_color = "#f8d7da"  # Red
+                    border_color = "#dc3545"
+                
+                if is_today:
+                    border_style = f"border: 3px solid #007bff;"
+                else:
+                    border_style = f"border: 1px solid {border_color};"
+                
+                st.markdown(f"""
+                    <div style="background: {bg_color}; {border_style} border-radius: 8px; padding: 10px; text-align: center;">
+                        <div style="font-weight: bold; font-size: 0.8rem;">{day_name}</div>
+                        <div style="font-size: 1.2rem; font-weight: bold;">{day_num}</div>
+                        <div style="font-size: 0.75rem;">{day_data['completed_count']}/{day_data['total_count']}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                # Show note indicator if there's a note
+                if day_data['daily_note']:
+                    st.caption("📝")
+    else:
+        st.info("No friends registered yet. Ask them to sign up!")
+
